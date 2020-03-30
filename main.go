@@ -16,8 +16,11 @@ package main
 
 import (
 	"fmt"
+	"log"
+	"os"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -33,7 +36,47 @@ import (
 	// _ "k8s.io/client-go/plugin/pkg/client/auth/openstack"
 )
 
-func main() {
+const CONFIG_FILE = "/etc/config/configmap-microservice-demo.yaml"
+
+type Config struct {
+	Message string `yaml:"message"`
+}
+
+func watchfile(sendch chan<- string) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer watcher.Close()
+	err = watcher.Add("/etc/config/configmap-microservice-demo.yaml")
+	if err != nil {
+		log.Fatal(err)
+	}
+	for {
+		sendch <- "Ping"
+		select {
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			log.Println("event:", event)
+			sendch <- event.Name
+			if event.Op&fsnotify.Write == fsnotify.Write {
+				//log.Println("modified file:", event.Name)
+
+			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Println("error:", err)
+		default:
+			sendch <- "End"
+		}
+	}
+}
+
+func listPods() {
 	// creates the in-cluster config
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -44,29 +87,35 @@ func main() {
 	if err != nil {
 		panic(err.Error())
 	}
+	pods, err := clientset.CoreV1().Pods("").List(metav1.ListOptions{})
+	if err != nil {
+		panic(err.Error())
+	}
+	fmt.Printf("There are %d pods in the cluster\n", len(pods.Items))
+	_, err = clientset.CoreV1().Pods("istio-system").Get("istiod-7976d98b5-m6mkv", metav1.GetOptions{})
+	if errors.IsNotFound(err) {
+		fmt.Printf("Pod istiod-7976d98b5-m6mkv not found in istio-system namespace\n")
+	} else if statusError, isStatus := err.(*errors.StatusError); isStatus {
+		fmt.Printf("Error getting pod %v\n", statusError.ErrStatus.Message)
+	} else if err != nil {
+		panic(err.Error())
+	} else {
+		fmt.Printf("Found istiod-7976d98b5-m6mkv pod in istio-system namespace\n")
+	}
+}
+func main() {
+
+	chnl := make(chan string)
+	go watchfile(chnl)
+	var msg string
 	for {
-		// get pods in all the namespaces by omitting namespace
-		// Or specify namespace to get pods in particular namespace
-		pods, err := clientset.CoreV1().Pods("").List(metav1.ListOptions{})
-		if err != nil {
-			panic(err.Error())
+		time.Sleep(4 * time.Second)
+		msg = <-chnl
+		if msg == "End" {
+			listPods()
+		} else if msg == "REMOVE" {
+			fmt.Println("COnfig Change Restarting!")
+			os.Exit(1)
 		}
-		fmt.Printf("There are %d pods in the cluster\n", len(pods.Items))
-
-		// Examples for error handling:
-		// - Use helper functions e.g. errors.IsNotFound()
-		// - And/or cast to StatusError and use its properties like e.g. ErrStatus.Message
-		_, err = clientset.CoreV1().Pods("default").Get("istiod-7976d98b5-m6mkv", metav1.GetOptions{})
-		if errors.IsNotFound(err) {
-			fmt.Printf("Pod istiod-7976d98b5-m6mkv not found in default namespace\n")
-		} else if statusError, isStatus := err.(*errors.StatusError); isStatus {
-			fmt.Printf("Error getting pod %v\n", statusError.ErrStatus.Message)
-		} else if err != nil {
-			panic(err.Error())
-		} else {
-			fmt.Printf("Found istiod-7976d98b5-m6mkv pod in default namespace\n")
-		}
-
-		time.Sleep(10 * time.Second)
 	}
 }
