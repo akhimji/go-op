@@ -59,11 +59,13 @@ func watchfile(sendch chan<- string) {
 			if !ok {
 				return
 			}
-			log.Println("event:", event)
+			log.Println("event 11:", event)
 			sendch <- event.Name
-			if event.Op&fsnotify.Write == fsnotify.Write {
-				//log.Println("modified file:", event.Name)
-
+			if event.Op == fsnotify.Remove {
+				log.Println("modified file:", event.Name)
+				sendch <- event.Name
+				fmt.Println("COnfig Change Restarting!")
+				os.Exit(0)
 			}
 		case err, ok := <-watcher.Errors:
 			if !ok {
@@ -108,6 +110,7 @@ func main() {
 	chnl := make(chan string)
 	go watchfile(chnl)
 	var msg string
+
 	for {
 		time.Sleep(4 * time.Second)
 		msg = <-chnl
